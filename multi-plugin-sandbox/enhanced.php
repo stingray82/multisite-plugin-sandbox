@@ -50,11 +50,3 @@ function block_php_execution_in_uploads() {
     }
 }
 register_activation_hook(__FILE__, 'block_php_execution_in_uploads');
-
-function disable_password_change_admin_emails_multisite() {
-    if (!is_main_site()) {
-        return; // Exit for subsites
-    }
-    add_filter( 'wp_password_change_notification_email', '__return_false' ); // Stops admin notification
-}
-add_action( 'init', 'disable_password_change_admin_emails_multisite' );
