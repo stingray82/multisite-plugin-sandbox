@@ -1,8 +1,8 @@
 <?php
 /*
 Plugin Name: Wordpress Multi-site API
-Description: A minimal plugin to allow multisite creating and deleting a multisite sandbox site with configurable settings via automator of your choice. Also includes an option to disable admin password change emails.
-Version: 1.1
+Description: A minimal plugin to allow multisite creating and deleting a multisite sandbox site with configurable settings via automator of your choice.
+Version: 1.12
 Author: Stingray82
 Network: true
 */
@@ -125,4 +125,55 @@ function create_multisite_sandbox(WP_REST_Request $request) {
     remove_user_from_blog($user_id, 1);
 
     return new WP_REST_Response(['success' => true, 'site_id' => $new_blog_id, 'url' => 'https://' . $new_site_domain], 200);
+}
+
+
+
+function register_multisite_deletion_api() {
+    register_rest_route('sandbox/v1', '/delete/', array(
+        'methods'  => 'POST',
+        'callback' => 'delete_multisite_sandbox',
+        'permission_callback' => '__return_true',
+    ));
+}
+add_action('rest_api_init', 'register_multisite_deletion_api');
+
+function delete_multisite_sandbox(WP_REST_Request $request) {
+    $secret_key = get_site_option('sandbox_secret_key', 'default-secret-key');
+    $provided_key = $request->get_param('secret');
+    
+    if (!$provided_key || $provided_key !== $secret_key) {
+        return new WP_REST_Response(['error' => 'Unauthorized'], 403);
+    }
+
+    $blog_id = intval($request->get_param('site_id'));
+    if (!$blog_id) {
+        return new WP_REST_Response(['error' => 'Missing site_id'], 400);
+    }
+
+    // Get the site's admin user
+    $users = get_users(array(
+        'blog_id' => $blog_id,
+        'role'    => 'administrator',
+        'fields'  => 'ID',
+    ));
+
+    if (!empty($users)) {
+        $user_id = $users[0];
+    }
+
+    require_once(ABSPATH . 'wp-admin/includes/ms.php');
+    wpmu_delete_blog($blog_id, true);
+
+    // Ensure the user is completely removed if they are not assigned to other sites
+    if (!empty($user_id)) {
+        global $wpdb;
+        $user_blogs = get_blogs_of_user($user_id);
+        if (empty($user_blogs) || count($user_blogs) === 0) {
+            require_once(ABSPATH . 'wp-admin/includes/user.php');
+            wpmu_delete_user($user_id);
+        }
+    }
+
+    return new WP_REST_Response(['success' => true, 'deleted' => $blog_id, 'deleted_user' => $user_id ?? null], 200);
 }
