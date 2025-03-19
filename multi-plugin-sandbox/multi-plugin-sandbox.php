@@ -1,11 +1,19 @@
 <?php
-/*
-Plugin Name: Wordpress Multi-site API
-Description: A minimal plugin to allow multisite creating and deleting a multisite sandbox site with configurable settings via automator of your choice.
-Version: 1.12
-Author: Stingray82
-Network: true
-*/
+/**
+ * Plugin Name:       Wordpress Multi-site API
+ * Tested up to:      6.7.2
+ * Description:       A minimal plugin to allow multisite creating and deleting a multisite sandbox site with configurable settings via automator of your choice.
+ * Requires at least: 6.5
+ * Requires PHP:      7.4
+ * Version:           1.12
+ * Author:            reallyusefulplugins.com
+ * Author URI:        https://reallyusefulplugins.com
+ * License:           GPL-2.0-or-later
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
+ * Text Domain:       wordpress-multisite-api
+ * Website:           https://reallyusefulplugins.com
+ * */
+
 
 if (!defined('ABSPATH')) exit;
 
