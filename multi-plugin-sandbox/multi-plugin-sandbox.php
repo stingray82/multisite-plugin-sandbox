@@ -5,7 +5,7 @@
  * Description:       A minimal plugin to allow multisite creating and deleting a multisite sandbox site with configurable settings via automator of your choice.
  * Requires at least: 6.5
  * Requires PHP:      7.4
- * Version:           1.12
+ * Version:           1.14
  * Author:            reallyusefulplugins.com
  * Author URI:        https://reallyusefulplugins.com
  * License:           GPL-2.0-or-later
@@ -22,6 +22,17 @@ if (file_exists(plugin_dir_path(__FILE__) . 'enhanced.php')) {
     include_once plugin_dir_path(__FILE__) . 'enhanced.php';
 }
 
+// An unset option means automatic detection. Explicit choices saved by older
+// versions are retained to avoid silently changing an existing integration.
+function sandbox_get_configured_mode() {
+    $mode = get_site_option('sandbox_site_mode', 'auto');
+    return in_array($mode, array('auto', 'subdomain', 'subfolder'), true) ? $mode : 'auto';
+}
+
+function sandbox_resolve_mode($mode) {
+    return 'auto' === $mode ? (is_subdomain_install() ? 'subdomain' : 'subfolder') : $mode;
+}
+
 // Add Admin Menu for Settings
 function sandbox_admin_menu() {
     add_menu_page('Sandbox Settings', 'Sandbox Settings', 'manage_options', 'sandbox-settings', 'sandbox_settings_page');
@@ -34,10 +45,16 @@ function sandbox_settings_page() {
         wp_die(__('You do not have sufficient permissions to access this page.'));
     }
     
-    if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-        update_site_option('sandbox_secret_key', sanitize_text_field($_POST['sandbox_secret_key']));
-        update_site_option('sandbox_base_domain', sanitize_text_field($_POST['sandbox_base_domain']));
+    if ('POST' === $_SERVER['REQUEST_METHOD']) {
+        check_admin_referer('sandbox_save_settings');
+        update_site_option('sandbox_secret_key', sanitize_text_field(wp_unslash($_POST['sandbox_secret_key'] ?? '')));
+        update_site_option('sandbox_base_domain', sanitize_text_field(wp_unslash($_POST['sandbox_base_domain'] ?? '')));
         update_site_option('disable_password_change_email', isset($_POST['disable_password_change_email']) ? 1 : 0);
+        // Keep any explicit existing preference unless an administrator changes it.
+        $mode = sanitize_key(wp_unslash($_POST['sandbox_site_mode'] ?? sandbox_get_configured_mode()));
+        if (in_array($mode, array('auto', 'subdomain', 'subfolder'), true)) {
+            update_site_option('sandbox_site_mode', $mode);
+        }
 
         echo '<div class="updated"><p>Settings saved.</p></div>';
     }
@@ -45,10 +62,13 @@ function sandbox_settings_page() {
     $secret_key = get_site_option('sandbox_secret_key', 'default-secret-key');
     $base_domain = get_site_option('sandbox_base_domain', 'wpdemo.uk');
     $disable_password_change_email = get_site_option('disable_password_change_email', 1); // Default is checked
+    $site_mode = sandbox_get_configured_mode();
+    $detected_mode = sandbox_resolve_mode('auto');
     ?>
     <div class="wrap">
         <h1>Sandbox API Settings</h1>
         <form method="post">
+            <?php wp_nonce_field('sandbox_save_settings'); ?>
             <table class="form-table">
                 <tr>
                     <th scope="row"><label for="sandbox_secret_key">Secret Key</label></th>
@@ -57,6 +77,20 @@ function sandbox_settings_page() {
                 <tr>
                     <th scope="row"><label for="sandbox_base_domain">Base Domain</label></th>
                     <td><input type="text" id="sandbox_base_domain" name="sandbox_base_domain" value="<?php echo esc_attr($base_domain); ?>" class="regular-text"></td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="sandbox_site_mode">Default Site URL Mode</label></th>
+                    <td>
+                        <select id="sandbox_site_mode" name="sandbox_site_mode">
+                            <option value="auto" <?php selected($site_mode, 'auto'); ?>>Automatic (detect WordPress network type)</option>
+                            <option value="subdomain" <?php selected($site_mode, 'subdomain'); ?>>Subdomain (demo.example.com)</option>
+                            <option value="subfolder" <?php selected($site_mode, 'subfolder'); ?>>Subfolder (example.com/demo/)</option>
+                        </select>
+                        <p class="description">Automatic is the default when no mode has previously been saved. The detected network type is <?php echo esc_html($detected_mode); ?>. An existing explicit choice is preserved during upgrade. This affects only new API-created sites; existing sites and API parameters are unchanged.</p>
+                        <?php if ('auto' !== $site_mode && ('subdomain' === $site_mode) !== is_subdomain_install()) : ?>
+                            <p style="color:#b32d2e;"><strong>Warning:</strong> This default does not match the current WordPress Multisite configuration. New site requests using this mode will be rejected safely; no existing sites will be changed.</p>
+                        <?php endif; ?>
+                    </td>
                 </tr>
                 <tr>
                     <th scope="row">Disable Admin Password Change Emails</th>
@@ -110,7 +144,40 @@ function create_multisite_sandbox(WP_REST_Request $request) {
         return new WP_REST_Response(['error' => 'Missing parameters'], 400);
     }
 
-    $new_site_domain = $site_slug . '.' . $base_domain;
+    // Optional API overrides are additive. Omitted mode uses the saved preference
+    // (if any), otherwise the current WordPress network type.
+    $api_mode = $request->get_param('site_mode');
+    if (null === $api_mode) {
+        $api_mode = $request->get_param('url_mode');
+    }
+    $mode = null === $api_mode || '' === $api_mode
+        ? sandbox_get_configured_mode()
+        : sanitize_key($api_mode);
+    $mode = sandbox_resolve_mode($mode);
+
+    if (!in_array($mode, array('subdomain', 'subfolder'), true)) {
+        return new WP_REST_Response(['error' => 'Invalid site_mode. Use auto, subdomain or subfolder.'], 400);
+    }
+    if (('subdomain' === $mode) !== is_subdomain_install()) {
+        return new WP_REST_Response(['error' => 'Requested site mode does not match the WordPress Multisite network configuration. No site was created.'], 400);
+    }
+
+    $network = get_network();
+    if (!$network) {
+        return new WP_REST_Response(['error' => 'WordPress network not found.'], 500);
+    }
+    if ('subdomain' === $mode) {
+        // The base-domain setting remains authoritative for existing integrations.
+        $domain = strtolower(trim((string) $base_domain, " \t\n\r\0\x0B/"));
+        if (empty($domain) || !preg_match('/^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/', $domain)) {
+            return new WP_REST_Response(['error' => 'Invalid Base Domain setting.'], 400);
+        }
+        $new_site_domain = $site_slug . '.' . $domain;
+        $new_site_path = '/';
+    } else {
+        $new_site_domain = $network->domain;
+        $new_site_path = trailingslashit(trailingslashit($network->path) . $site_slug);
+    }
 
     $user = get_user_by('email', $admin_email);
     if (!$user) {
@@ -124,7 +191,7 @@ function create_multisite_sandbox(WP_REST_Request $request) {
         $user_id = $user->ID;
     }
 
-    $new_blog_id = wpmu_create_blog($new_site_domain, '/', $site_title, $user_id, ['public' => 1], 1);
+    $new_blog_id = wpmu_create_blog($new_site_domain, $new_site_path, $site_title, $user_id, ['public' => 1], $network->id);
     if (is_wp_error($new_blog_id)) {
         return new WP_REST_Response(['error' => $new_blog_id->get_error_message()], 500);
     }
@@ -132,7 +199,8 @@ function create_multisite_sandbox(WP_REST_Request $request) {
     add_user_to_blog($new_blog_id, $user_id, 'administrator');
     remove_user_from_blog($user_id, 1);
 
-    return new WP_REST_Response(['success' => true, 'site_id' => $new_blog_id, 'url' => 'https://' . $new_site_domain], 200);
+    $created_url = 'https://' . $new_site_domain . ('subfolder' === $mode ? $new_site_path : '');
+    return new WP_REST_Response(['success' => true, 'site_id' => $new_blog_id, 'url' => $created_url], 200);
 }
 
 
