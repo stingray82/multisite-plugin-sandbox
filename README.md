@@ -13,12 +13,8 @@ the **creation and deletion** of sandbox sites in a **WordPress Multisite**
 network. This documentation outlines how to interact with the API using
 **FlowMattic** or any other automation tool.
 
- 
-
-I have used hooksure.wpdemo.uk as the base domain for this instructions as this
-is the first site i created with this plugin
-
- 
+ I have used hooksure.wpdemo.uk as the base domain for this instructions as this
+is the first site i created with this plugin 
 
 ### **Base Domain:** `hooksure.wpdemo.uk`
 
@@ -31,9 +27,7 @@ You Set your base-domain in sandbox settings in your main multi-site site, you
 also set your security key (see security) The default setting is not to get
 password email changes but you can also change that.
 
- 
-
- 
+  
 
 🔒 Security
 ----------
